@@ -314,7 +314,10 @@ copy_self() {
 }
 
 write_termux_controller() {
+  local container=${1:-$CONTAINER_NAME}
   local destination="$HOME/.local/bin/ptero-panel"
+  [[ $container =~ ^[A-Za-z0-9._-]+$ ]] ||
+    die "Invalid proot-distro guest name: $container"
   mkdir -p "$(dirname "$destination")" "$HOME/.local/state/pterodactyl-proot"
 
   cat >"$destination" <<'CONTROLLER'
@@ -487,14 +490,22 @@ main() {
 main "$@"
 CONTROLLER
 
+  local rendered="$destination.rendered"
+  awk -v replacement="CONTAINER=\"$container\"" '
+    /^CONTAINER=/ {print replacement; next}
+    {print}
+  ' "$destination" >"$rendered"
+  mv "$rendered" "$destination"
   chmod 755 "$destination"
-  success "Installed Termux controller at $destination"
+  success "Installed Termux controller for '$container' at $destination"
 }
 
 termux_phase() {
   local cached_installer="$HOME/.local/share/pterodactyl-proot/install.sh"
   local arch
   local guest_exists=0
+  local installed_guests=""
+  local attached_guest=""
 
   [[ ${EUID:-1} -ne 0 ]] || die "Do not run the Termux phase as root."
   arch=$(normalize_arch "$(uname -m)") || die "Only ARM64 and x86_64 devices are supported."
@@ -524,6 +535,41 @@ termux_phase() {
     die "This proot-distro lacks detached sessions. Update Termux packages and rerun the installer."
 
   copy_self "$cached_installer"
+
+  installed_guests=$(proot-distro list -q 2>/dev/null || true)
+  if ! printf '%s\n' "$installed_guests" | grep -Fxq "$CONTAINER_NAME" &&
+    [[ -n $installed_guests ]] &&
+    prompt_yes_no "Attach an existing completed Panel guest to the detached Termux controller?" no; then
+    info "Installed proot-distro guests:"
+    printf '%s\n' "$installed_guests" | sed 's/^/  - /'
+    read -r -p "* Exact guest name: " attached_guest
+    [[ $attached_guest =~ ^[A-Za-z0-9._-]+$ ]] ||
+      die "Guest names may contain only letters, numbers, dots, underscores, and hyphens."
+    printf '%s\n' "$installed_guests" | grep -Fxq "$attached_guest" ||
+      die "No installed proot-distro guest is named '$attached_guest'."
+    if ! proot-distro login "$attached_guest" -- sh -c \
+      "grep -Fxq '$MANAGED_MARKER' '$MANAGED_FILE' &&
+       test -x '$RUNTIME_BIN' &&
+       test -f '$INSTALL_CONFIG' &&
+       test -f '$PANEL_DIR/.env'" >/dev/null 2>&1; then
+      die "Guest '$attached_guest' is not a completed Panel guest managed by this installer."
+    fi
+
+    info "Updating the managed installer copy inside '$attached_guest'..."
+    proot-distro login \
+      --bind "$HOME/.local/share/pterodactyl-proot:/mnt/pterodactyl-installer" \
+      "$attached_guest" -- \
+      install -m 755 /mnt/pterodactyl-installer/install.sh "$GUEST_INSTALLER"
+    write_termux_controller "$attached_guest"
+    if [[ :$PATH: != *":$HOME/.local/bin:"* ]]; then
+      warn "Add \$HOME/.local/bin to PATH to run 'ptero-panel' directly."
+    fi
+    "$HOME/.local/bin/ptero-panel" start
+    printf '\n'
+    success "Attached '$attached_guest'; the Panel now runs in a detached PRoot session."
+    info "Enable startup after phone reboot with: ptero-panel boot enable"
+    return
+  fi
 
   if proot-distro list -q 2>/dev/null | grep -Fxq "$CONTAINER_NAME"; then
     guest_exists=1
