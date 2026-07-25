@@ -42,21 +42,31 @@ BOOTSTRAP_REDIS_PID=""
 PHP_VERSION=""
 GUEST_OS=""
 GUEST_VERSION=""
+INSTALL_LOG_ACTIVE=0
+
+append_install_log() {
+  [[ $INSTALL_LOG_ACTIVE == 1 ]] || return 0
+  printf '%s\n' "$*" >>"$INSTALL_LOG" 2>/dev/null || true
+}
 
 info() {
   printf '%s\n' "* $*"
+  append_install_log "* $*"
 }
 
 success() {
   printf '%s\n' "* ${COLOR_GREEN}SUCCESS${COLOR_NC}: $*"
+  append_install_log "* SUCCESS: $*"
 }
 
 warn() {
   printf '%s\n' "* ${COLOR_YELLOW}WARNING${COLOR_NC}: $*" >&2
+  append_install_log "* WARNING: $*"
 }
 
 die() {
   printf '%s\n' "* ${COLOR_RED}ERROR${COLOR_NC}: $*" >&2
+  append_install_log "* ERROR: $*"
   exit 1
 }
 
@@ -83,11 +93,15 @@ on_error() {
   local line=${1:-unknown}
   local command=${2:-unknown}
   local context=${FUNCNAME[1]:-main}
+  local safe_command
   trap - ERR
+  safe_command=$(redact_error_command "$command")
   printf '%s\n' "* ${COLOR_RED}ERROR${COLOR_NC}: Installation failed near line $line." >&2
   printf '%s\n' "* Context: $context" >&2
-  printf '%s' "* Command: " >&2
-  redact_error_command "$command" >&2
+  printf '%s\n' "* Command: $safe_command" >&2
+  append_install_log "* ERROR: Installation failed near line $line."
+  append_install_log "* Context: $context"
+  append_install_log "* Command: $safe_command"
   if [[ -n ${INSTALL_LOG:-} && -f ${INSTALL_LOG:-} ]]; then
     printf '%s\n' "* Review $INSTALL_LOG, fix the reported issue, then rerun the installer to resume." >&2
   fi
@@ -560,7 +574,8 @@ setup_guest_logging() {
   chmod 700 "$STATE_DIR" "$INSTALL_STATE_DIR"
   touch "$INSTALL_LOG"
   chmod 600 "$INSTALL_LOG"
-  exec > >(tee -a "$INSTALL_LOG") 2>&1
+  INSTALL_LOG_ACTIVE=1
+  info "Installation events are logged to $INSTALL_LOG."
 }
 
 load_guest_os() {
@@ -711,7 +726,9 @@ install_dependencies() {
 }
 
 install_composer() {
-  if command_exists composer && composer --version 2>/dev/null | grep -q 'version 2'; then
+  if command_exists composer &&
+    COMPOSER_ALLOW_SUPERUSER=1 composer --no-interaction --version 2>/dev/null |
+      grep -q 'version 2'; then
     mark_step composer
     return
   fi
@@ -724,7 +741,8 @@ install_composer() {
   [[ $actual == "$expected" ]] || die "Composer installer signature verification failed."
   php "$installer" --install-dir=/usr/local/bin --filename=composer --2
   rm -f "$installer"
-  composer --version | grep -q 'version 2' || die "Composer 2 installation failed."
+  COMPOSER_ALLOW_SUPERUSER=1 composer --no-interaction --version |
+    grep -q 'version 2' || die "Composer 2 installation failed."
   mark_step composer
 }
 
@@ -1691,7 +1709,9 @@ main() {
       ;;
   esac
 
+  info "Starting the Pterodactyl PRoot installer..."
   mode=$(detect_mode)
+  info "Launch environment: $mode."
   if [[ ${1:-} == --network ]]; then
     [[ $mode == guest ]] || die "Network reconfiguration must run inside the managed guest."
     network_phase
@@ -1713,4 +1733,6 @@ main() {
 
 if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
   main "$@"
+elif [[ ${PTERO_INSTALLER_LIBRARY_MODE:-0} != 1 ]]; then
+  warn "install.sh was sourced, so installation did not start. Run it with: bash install.sh"
 fi
