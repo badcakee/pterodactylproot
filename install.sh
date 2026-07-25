@@ -1440,7 +1440,7 @@ install_panel_dependencies() {
     cd "$PANEL_DIR"
     [[ -f .env ]] || cp .env.example .env
     COMPOSER_ALLOW_SUPERUSER=1 composer install \
-      --no-dev --optimize-autoloader --no-interaction --no-progress
+      --no-dev --optimize-autoloader --no-interaction --no-progress --no-scripts
   )
   mark_step panel_dependencies
 }
@@ -1524,6 +1524,18 @@ configure_panel() (
   mark_step panel_config
 )
 
+run_panel_composer_hooks() {
+  info "Running Panel Composer hooks with MariaDB and Redis available..."
+  (
+    cd "$PANEL_DIR"
+    COMPOSER_ALLOW_SUPERUSER=1 composer run-script \
+      post-autoload-dump --no-interaction
+    COMPOSER_ALLOW_SUPERUSER=1 composer run-script \
+      post-install-cmd --no-interaction
+  )
+  mark_step panel_composer_hooks
+}
+
 prompt_admin_password() {
   local first second
   while true; do
@@ -1591,7 +1603,9 @@ finalize_guest() {
   if [[ ${PTERO_INTERNAL_GUEST:-0} == 1 ]]; then
     info "Back up APP_KEY after startup with: ptero-panel app-key"
   else
+    warn "The Panel is installed but currently stopped; direct PRoot installs are not backgrounded automatically."
     info "Keep services running with: /usr/local/bin/ptero-runtime foreground"
+    info "Run curl from another terminal after the runtime reports that its services are RUNNING."
     info "Back up APP_KEY with: /usr/local/bin/ptero-runtime app-key"
   fi
 }
@@ -1617,6 +1631,7 @@ guest_phase() {
   start_bootstrap_services
   configure_database
   configure_panel
+  run_panel_composer_hooks
   create_admin
   stop_bootstrap_services
   finalize_guest
