@@ -64,10 +64,30 @@ command_exists() {
   command -v "$1" >/dev/null 2>&1
 }
 
+redact_error_command() {
+  local command=${1:-unknown}
+  local normalized
+  normalized=$(printf '%s' "$command" | tr '[:lower:]' '[:upper:]')
+  if [[ $normalized == *PASSWORD* ||
+    $normalized == *APP_KEY* ||
+    $normalized == *TOKEN* ||
+    $normalized == *SECRET* ]]; then
+    printf '%s\n' "[redacted because the command may contain a secret]"
+  else
+    printf '%s\n' "$command"
+  fi
+}
+
 on_error() {
   local status=$?
   local line=${1:-unknown}
+  local command=${2:-unknown}
+  local context=${FUNCNAME[1]:-main}
+  trap - ERR
   printf '%s\n' "* ${COLOR_RED}ERROR${COLOR_NC}: Installation failed near line $line." >&2
+  printf '%s\n' "* Context: $context" >&2
+  printf '%s' "* Command: " >&2
+  redact_error_command "$command" >&2
   if [[ -n ${INSTALL_LOG:-} && -f ${INSTALL_LOG:-} ]]; then
     printf '%s\n' "* Review $INSTALL_LOG, fix the reported issue, then rerun the installer to resume." >&2
   fi
@@ -579,13 +599,13 @@ create_management_marker() {
 }
 
 stop_guest_runtime_for_install() {
-  [[ -x $RUNTIME_BIN ]] || return
+  [[ -x $RUNTIME_BIN ]] || return 0
   if "$RUNTIME_BIN" running >/dev/null 2>&1; then
     info "Stopping the existing Panel runtime before resuming installation..."
     "$RUNTIME_BIN" stop || true
     local _
     for _ in $(seq 1 20); do
-      "$RUNTIME_BIN" running >/dev/null 2>&1 || return
+      "$RUNTIME_BIN" running >/dev/null 2>&1 || return 0
       sleep 1
     done
     die "The existing Panel runtime did not stop cleanly."
@@ -1552,7 +1572,7 @@ finalize_guest() {
 guest_phase() {
   [[ ${EUID:-1} -eq 0 ]] || die "Run the guest installation as the PRoot root user."
   setup_guest_logging
-  trap 'on_error $LINENO' ERR
+  trap 'on_error "$LINENO" "$BASH_COMMAND"' ERR
   trap cleanup_guest EXIT
 
   load_guest_os
@@ -1691,6 +1711,6 @@ main() {
   esac
 }
 
-if [[ ${PTERO_TEST_MODE:-0} != 1 ]]; then
+if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
   main "$@"
 fi
