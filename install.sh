@@ -29,6 +29,13 @@ GUEST_INSTALLER="/usr/local/share/pterodactyl-proot/install.sh"
 RUNTIME_BIN="${PTERO_RUNTIME_BIN:-/usr/local/bin/ptero-runtime}"
 OFFICIAL_PANEL_API="https://api.github.com/repos/pterodactyl/panel/releases/latest"
 
+# BASH_SOURCE may be relative (for example, "./install.sh"). Installation later
+# changes into the Panel directory, so preserve an absolute source path now.
+INSTALLER_SOURCE=${BASH_SOURCE[0]}
+if [[ $INSTALLER_SOURCE != /* ]]; then
+  INSTALLER_SOURCE="$PWD/${INSTALLER_SOURCE#./}"
+fi
+
 COLOR_RED=$'\033[0;31m'
 COLOR_GREEN=$'\033[0;32m'
 COLOR_YELLOW=$'\033[1;33m'
@@ -298,7 +305,9 @@ warn_resources() {
 
 copy_self() {
   local destination=$1
-  local source=${BASH_SOURCE[0]}
+  local source=$INSTALLER_SOURCE
+  [[ -f $source ]] ||
+    die "Installer source $source is no longer available. Rerun from a saved install.sh file."
   mkdir -p "$(dirname "$destination")"
   cp "$source" "$destination"
   chmod 755 "$destination"
@@ -1482,7 +1491,7 @@ env_value() {
   awk -F= -v key="$key" '$1 == key {sub(/^[^=]*=/, ""); print; exit}' "$PANEL_DIR/.env"
 }
 
-configure_panel() {
+configure_panel() (
   local app_key
   cd "$PANEL_DIR"
 
@@ -1513,7 +1522,7 @@ configure_panel() {
 
   php artisan migrate --seed --force --no-interaction
   mark_step panel_config
-}
+)
 
 prompt_admin_password() {
   local first second
